@@ -2,15 +2,21 @@
 //  LỚP HỌC CHỮ - APP ENTRYPOINT
 //  Admin Workspace Architecture & Neo-Brutalism Design by GumballZ
 // =======================================================================
-import { IS_STAGE } from './live/page';
+import { IS_STAGE, IS_BOARD } from './live/page';
 import { StageFrame } from './live/StageFrame';
 import { Dashboard } from './live/Dashboard';
+import { LiveLeaderboard } from './live/LiveLeaderboard';
 import { useGame } from './game/useGame';
 import { GameStage } from './game/GameStage';
 import { GameControls } from './game/GameControls';
 
 export default function App() {
   const game = useGame();
+
+  // Trang web riêng xem bảng xếp hạng & bục phạt: /?view=board
+  if (IS_BOARD) {
+    return <LiveLeaderboard />;
+  }
 
   // Trang cho TikTok LIVE Studio: chỉ có màn hình game 1080x1920
   if (IS_STAGE) {

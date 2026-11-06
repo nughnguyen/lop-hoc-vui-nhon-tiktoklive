@@ -4,6 +4,7 @@ import type { GameState, StageView } from './useGame';
 import { GAME } from './config';
 import { Hair } from './Hair';
 import { giftOf } from './quiz';
+import { voice } from '../live/voice';
 import './stage.css';
 
 /**
@@ -91,19 +92,43 @@ function useNow(ms = 250) {
 
 export function GameStage({ game }: { game: GameState }) {
   const now = useNow();
+  const [audioBlocked, setAudioBlocked] = useState(voice.autoplayBlocked);
+
   useEffect(() => {
+    voice.onAutoplayChange = (blocked) => setAudioBlocked(blocked);
     for (const src of ALL_IMGS) new Image().src = src;
   }, []);
+
   const v = game.view;
   if (!v) {
     return (
       <div className="flex h-full items-center justify-center bg-black/60 p-20 text-center text-[48px] text-white">
-        Chưa mở trang stage (lvh.me:3000/?view=stage) nên chưa có gì để xem trước
+        Chưa mở trang stage (/?view=stage) nên chưa có gì để xem trước. Hãy mở trang stage để lớp học bắt đầu!
       </div>
     );
   }
   return (
-    <div className={`relative h-full w-full overflow-hidden ${v.clapping ? 'class-clap' : ''}`}>
+    <div
+      onClick={() => {
+        if (audioBlocked) {
+          voice.unlockAudio();
+          setAudioBlocked(false);
+        }
+      }}
+      className={`relative h-full w-full overflow-hidden ${v.clapping ? 'class-clap' : ''}`}
+    >
+      {audioBlocked && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            voice.unlockAudio();
+            setAudioBlocked(false);
+          }}
+          className="absolute left-1/2 top-[120px] z-[99] -translate-x-1/2 animate-bounce rounded-full border-4 border-black bg-[#F9E8A2] px-8 py-4 text-[28px] font-black text-black shadow-[4px_4px_0_#000]"
+        >
+          🔊 BẤM VÀO ĐÂY ĐỂ BẬT GIỌNG ĐỌC CÔ NGÂN
+        </button>
+      )}
       {/* tặng hoa: chỉ có bạn nhỏ đi lên bục đưa cô (FlowerWalk), không zoom, không khung cận cảnh (chủ kênh bỏ 2026-11-04).
           Giữ motion.div như cũ (scale luôn 1): đổi sang div thường thì hình trên live khác đi */}
       <motion.div className="absolute inset-0" style={{ transformOrigin: '330px 700px' }} animate={{ scale: 1 }}>
@@ -245,7 +270,10 @@ function Header({ v, name }: { v: StageView; name: string }) {
 
 // ---------- Bảng đen ----------
 function Board({ v, now }: { v: StageView; now: number }) {
-  const left = Math.max(0, Math.ceil((v.endsAt - now) / 1000));
+  // Khi cô đang đọc đề (boardShown = false trong phase question), chưa đếm ngược trả lời, giữ nguyên questionSec
+  const left = !v.boardShown && v.phase === 'question'
+    ? GAME.questionSec
+    : Math.max(0, Math.ceil((v.endsAt - now) / 1000));
   return (
     <div className={`chalk absolute left-[350px] top-[262px] h-[348px] w-[555px] text-[#f4f1e6] ${v.golden && v.phase !== 'recess' ? 'golden-board' : ''}`}>
       {v.phase === 'intro' && v.round % 2 === 0 && v.weekTop.length > 0 && <WeekBoard v={v} left={left} />}
@@ -286,7 +314,17 @@ function Board({ v, now }: { v: StageView; now: number }) {
                         : v.category}
               </span>
             )}
-            {v.phase !== 'reveal' ? <Timer left={left} /> : <span className="text-[34px] text-[#9df29d]">Đáp án</span>}
+            {v.phase !== 'reveal' ? (
+              !v.boardShown && v.phase === 'question' ? (
+                <span className="rounded-full bg-[#f4f1e6]/20 px-3 py-1 text-[26px] font-bold text-[#ffe680]">
+                  👂 Nghe cô đọc…
+                </span>
+              ) : (
+                <Timer left={left} />
+              )
+            ) : (
+              <span className="text-[34px] text-[#9df29d]">Đáp án</span>
+            )}
           </div>
           {!v.boardShown ? (
             v.riddleNo === 1 ? (

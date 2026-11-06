@@ -7,6 +7,7 @@ export interface LiveStatus {
   roomId: string;
   viewerCount: number;
   totalLikes: number;
+  connectedAt?: number;
   error?: string;
 }
 

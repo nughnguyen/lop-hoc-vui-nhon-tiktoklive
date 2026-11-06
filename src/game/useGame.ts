@@ -292,13 +292,13 @@ export function useGame() {
           const step = sh?.steps[sh.i]?.k;
           const busy = mainSpeaking.current > 0;
           sfx.music(sh?.kind ?? null, !sh || busy ? 0 : room.showAsking() ? (room.phaseEndsAt - now <= 5000 ? 2 : 1) : step === 'gather' || step === 'honor' ? 1 : 0);
-          if (!dirty.current && now - lastSent < 1000) return;
+          const shouldSend = dirty.current || now - lastSent >= 350;
           dirty.current = false;
           const v = { ...room.view(now), weekTop: weekTop.current, todayTop: dayBoard(todayTop.current, room.weekDelta), talkTop: dayBoard(talkTop.current, room.talkDelta) };
           sfx.watch(prevView, v);
           prevView = v;
           setView(v);
-          if (now - lastSent >= 400) {
+          if (shouldSend) {
             lastSent = now;
             fetch('/api/game/state', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(v) }).catch(() => {});
           }

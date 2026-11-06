@@ -64,6 +64,44 @@ export function Dashboard({
   const [busy, setBusy] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
 
+  // Thời gian đếm phiên live (Session Uptime)
+  const [liveSeconds, setLiveSeconds] = useState(0);
+  useEffect(() => {
+    if (!status?.isConnected) {
+      setLiveSeconds(0);
+      return;
+    }
+    const start = status.connectedAt || Date.now();
+    const update = () => {
+      setLiveSeconds(Math.max(0, Math.floor((Date.now() - start) / 1000)));
+    };
+    update();
+    const timer = setInterval(update, 1000);
+    return () => clearInterval(timer);
+  }, [status?.isConnected, status?.connectedAt]);
+
+  const formatLiveDuration = (totalSec: number) => {
+    const h = Math.floor(totalSec / 3600);
+    const m = Math.floor((totalSec % 3600) / 60);
+    const s = totalSec % 60;
+    if (h > 0) {
+      return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+    }
+    return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  };
+
+  // Đồng hồ nhịp để đếm câu hỏi trên màn preview
+  const [dashNow, setDashNow] = useState(Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setDashNow(Date.now()), 250);
+    return () => clearInterval(t);
+  }, []);
+  const questionLeft = view
+    ? !view.boardShown && view.phase === 'question'
+      ? GAME.questionSec
+      : Math.max(0, Math.ceil((view.endsAt - dashNow) / 1000))
+    : 0;
+
   // Voice speech state
   const [speakText, setSpeakText] = useState('');
 
@@ -133,7 +171,12 @@ export function Dashboard({
     const textToSay = customPhrase ?? speakText;
     if (!textToSay.trim()) return;
     const r = await sendControl('speak', textToSay);
-    setMsg(r.pages > 1 ? `Đã gửi (đang mở ${r.pages} trang)` : 'Đã gửi lời đọc cho MC!');
+    // Phát giọng đọc ngay trên trang admin để chủ kênh nghe thử trực tiếp
+    try {
+      const audio = new Audio(`/api/tts?rate=1.0&v=f&text=${encodeURIComponent(textToSay)}`);
+      audio.play().catch(() => {});
+    } catch {}
+    setMsg(r.pages > 1 ? `Đã gửi (đang mở ${r.pages} trang)` : 'Đã phát lời đọc cho MC!');
     if (!customPhrase) setSpeakText('');
     setTimeout(() => setMsg(''), 3000);
   };
@@ -147,7 +190,9 @@ export function Dashboard({
   };
 
   const copyLiveLink = () => {
-    const link = `http://lvh.me:${window.location.port || 80}/?view=stage`;
+    const host = window.location.hostname || 'localhost';
+    const port = window.location.port ? `:${window.location.port}` : '';
+    const link = `http://${host}${port}/?view=stage`;
     navigator.clipboard.writeText(link).then(() => {
       setCopiedLink(true);
       setTimeout(() => setCopiedLink(false), 2000);
@@ -193,6 +238,10 @@ export function Dashboard({
               </span>
               <span className="font-black text-black">@{status.username}</span>
               <span className="text-black/40">|</span>
+              <span className="font-mono font-black text-emerald-800" title="Thời gian phiên live">
+                ⏱️ {formatLiveDuration(liveSeconds)}
+              </span>
+              <span className="text-black/40">|</span>
               <span>{status.viewerCount} xem</span>
               <span className="text-black/40">|</span>
               <span>{status.totalLikes} tim</span>
@@ -235,6 +284,16 @@ export function Dashboard({
             <FileText className="h-3.5 w-3.5 text-black" />
             <span>Mở Báo Cáo</span>
           </a>
+
+          {/* Mở Bảng Xếp Hạng & Bục Phạt */}
+          <button
+            onClick={() => window.open(`/?view=board`, '_blank')}
+            className="neo-btn flex items-center gap-1.5 rounded-lg border-2 border-black bg-[#F9E8A2] px-3 py-1 text-xs font-black text-black shadow-[2px_2px_0px_#000]"
+            title="Mở trang web riêng xem ai comment nhanh nhất & ai bị phạt đứng lên bục"
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+            <span>Bảng Xếp Hạng & Bục Phạt</span>
+          </button>
 
           {/* Mở Stage */}
           <button
@@ -656,7 +715,7 @@ export function Dashboard({
                       <div>
                         <div className="text-xs font-black uppercase text-black/60">Đường dẫn LIVE Studio (1080×1920):</div>
                         <div className="mt-1 font-mono text-xs font-bold text-black">
-                          http://lvh.me:{window.location.port || 80}/?view=stage
+                          http://{window.location.hostname || 'localhost'}:{window.location.port || 3006}/?view=stage
                         </div>
                       </div>
                       <button
@@ -733,8 +792,23 @@ export function Dashboard({
             {/* Quick Live Indicators on top of preview */}
             {view && (
               <div className="flex items-center justify-between border-b-2 border-black bg-[#F9E8A2] px-2.5 py-1 text-[11px] font-bold">
-                <div>
-                  Ván {view.round} · Câu {view.qNo}/{view.total} · <span className="uppercase">{view.phase}</span>
+                <div className="flex items-center gap-1.5">
+                  <span>Ván {view.round} · Câu {view.qNo}/{view.total} · <span className="uppercase">{view.phase}</span></span>
+                  {view.phase === 'question' && (
+                    <span className="rounded bg-black px-1.5 py-0.5 text-[10px] font-black text-[#F9E8A2]">
+                      {!view.boardShown ? '👂 Đọc đề' : `⏱️ ${questionLeft}s`}
+                    </span>
+                  )}
+                  {view.phase === 'bonus' && (
+                    <span className="rounded bg-black px-1.5 py-0.5 text-[10px] font-black text-[#FF8A7A]">
+                      ⏱️ +{questionLeft}s
+                    </span>
+                  )}
+                  {view.phase === 'team' && (
+                    <span className="rounded bg-black px-1.5 py-0.5 text-[10px] font-black text-[#78A4CB]">
+                      ⏱️ {questionLeft}s
+                    </span>
+                  )}
                 </div>
                 <div>
                   Đáp án: <b className="text-red-700 underline">{view.answer || '—'}</b>

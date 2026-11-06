@@ -34,8 +34,33 @@ class Voice {
   rate = readRate(); // mặc định 1.25: MC nói nhanh cho tiết tấu dồn dập (chủ kênh chốt); chỉnh ở trang điều khiển
   volume = 1;
   enabled = IS_STAGE;
+  autoplayBlocked = false;
+  onAutoplayChange?: (blocked: boolean) => void;
   /** báo MC nào đang nói (để nhân vật MC trên sân khấu nhún nhảy) */
   onSpeaker?: (who: 'M' | 'F' | null) => void;
+
+  constructor() {
+    if (typeof window !== 'undefined') {
+      const unlock = () => {
+        this.unlockAudio();
+        window.removeEventListener('click', unlock);
+        window.removeEventListener('pointerdown', unlock);
+        window.removeEventListener('keydown', unlock);
+      };
+      window.addEventListener('click', unlock, { passive: true });
+      window.addEventListener('pointerdown', unlock, { passive: true });
+      window.addEventListener('keydown', unlock, { passive: true });
+    }
+  }
+
+  unlockAudio() {
+    this.autoplayBlocked = false;
+    this.onAutoplayChange?.(false);
+    try {
+      const silent = new Audio('data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA');
+      silent.play().catch(() => {});
+    } catch {}
+  }
 
   /** `done`: gọi khi câu đọc xong, bị bỏ, hoặc trang này không phát tiếng */
   say(text: string, priority = false, done?: () => void, keep = false, start?: () => void, valid?: () => boolean) {
@@ -147,18 +172,32 @@ class Voice {
               audio.pause(); // câu đã bỏ mà vẫn kịp phát: tắt ngay
               return;
             }
+            if (this.autoplayBlocked) {
+              this.autoplayBlocked = false;
+              this.onAutoplayChange?.(false);
+            }
             clearTimeout(guard);
             const ms = Number.isFinite(audio.duration) ? audio.duration * 1000 + 4000 : 40_000;
             guard = setTimeout(finish, ms);
           };
           audio.onended = finish;
           audio.onerror = finish;
-          // trình duyệt chặn tự phát tiếng: thử lại vài lần thay vì bỏ câu (câu đã bỏ thì thôi)
+          // trình duyệt chặn tự phát tiếng: thử lại 1 lần nhanh, nếu chặn thì báo để mở âm thanh và tiếp tục game ngay
           const tryPlay = (left: number) => {
             if (over) return;
-            audio.play().catch(() => (left > 0 && !over ? setTimeout(() => tryPlay(left - 1), 1500) : finish()));
+            audio.play().catch((err: any) => {
+              if (err?.name === 'NotAllowedError') {
+                this.autoplayBlocked = true;
+                this.onAutoplayChange?.(true);
+              }
+              if (left > 0 && !over) {
+                setTimeout(() => tryPlay(left - 1), 500);
+              } else {
+                finish();
+              }
+            });
           };
-          tryPlay(4);
+          tryPlay(1);
         });
         if (this.current !== audio) break; // stop() giữa chừng
       }

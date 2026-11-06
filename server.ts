@@ -50,6 +50,7 @@ interface LiveStats {
   roomId: string;
   viewerCount: number;
   totalLikes: number;
+  connectedAt?: number;
   error?: string;
 }
 
@@ -60,6 +61,7 @@ const emptyStats = (): LiveStats => ({
   roomId: '',
   viewerCount: 0,
   totalLikes: 0,
+  connectedAt: undefined,
   error: '',
 });
 
@@ -209,7 +211,7 @@ async function connectTikTok(cleanUser: string) {
 
   conn.on(ControlEvent.CONNECTED, (state: { roomId?: string }) => {
     console.log(`[TikTok] Đã kết nối @${cleanUser}, room ${state?.roomId}`);
-    liveStats = { ...liveStats, isConnected: true, isConnecting: false, roomId: state?.roomId || '', error: '' };
+    liveStats = { ...liveStats, isConnected: true, isConnecting: false, roomId: state?.roomId || '', connectedAt: Date.now(), error: '' };
     newLiveRoom(state?.roomId || '');
     broadcast('status', liveStats);
     reconnectTries = 0;
@@ -219,14 +221,14 @@ async function connectTikTok(cleanUser: string) {
   conn.on(ControlEvent.DISCONNECTED, () => {
     console.log(`[TikTok] Mất kết nối @${cleanUser}`);
     if (activeConn !== conn) return;
-    liveStats = { ...liveStats, isConnected: false, isConnecting: false };
+    liveStats = { ...liveStats, isConnected: false, isConnecting: false, connectedAt: undefined };
     broadcast('status', liveStats);
     scheduleReconnect('Mất kết nối TikTok');
   });
 
   conn.on(WebcastEvent.STREAM_END, () => {
     if (activeConn !== conn) return;
-    liveStats = { ...liveStats, isConnected: false, isConnecting: false, error: 'Phiên live đã kết thúc' };
+    liveStats = { ...liveStats, isConnected: false, isConnecting: false, connectedAt: undefined, error: 'Phiên live đã kết thúc' };
     broadcast('status', liveStats);
     scheduleReconnect('Phiên live đã kết thúc');
   });
@@ -402,28 +404,14 @@ function splitText(text: string, max = 190): string[] {
 }
 
 // hype = câu hô của MC ("Hoan hô!", "Ối dồi ôi!"): chỉ to hơn, giữ nguyên cao độ (đổi cao độ nghe như người khác nói)
-// Edge chặn (lỗi 429) khi mở nhiều kết nối một lúc: cho đi từng câu một, câu giống nhau đang tạo thì dùng chung,
-// bị chặn thì chờ rồi thử lại, hết cách mới sang giọng dự phòng.
-let edgeChain: Promise<unknown> = Promise.resolve();
+// Edge TTS: nếu lỗi hoặc chậm quá 4s thì chuyển ngay sang Google TTS để không bao giờ bị đứng giọng / đứng giờ
 const edgeInflight = new Map<string, Promise<Buffer>>();
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 function edgeTts(text: string, rate: number, hype = false, voiceName = TTS_VOICE): Promise<Buffer> {
   const key = `${voiceName}|${rate}|${hype}|${text}`;
   const running = edgeInflight.get(key);
   if (running) return running;
-  const job = edgeChain.then(async () => {
-    let last: unknown;
-    for (const wait of [0, 2000, 5000, 10000]) {
-      if (wait) await sleep(wait);
-      try {
-        return await edgeTtsOnce(text, rate, hype, voiceName);
-      } catch (err) {
-        last = err;
-      }
-    }
-    throw last;
-  });
-  edgeChain = job.catch(() => {});
+  const job = edgeTtsOnce(text, rate, hype, voiceName);
   edgeInflight.set(key, job);
   job.finally(() => edgeInflight.delete(key)).catch(() => {});
   return job;
@@ -442,12 +430,14 @@ async function edgeTtsOnce(text: string, rate: number, hype = false, voiceName =
     const read = (async () => {
       for await (const c of audioStream) chunks.push(c as Buffer);
     })();
-    const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('Edge TTS timeout')), 20000));
+    const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('Edge TTS timeout')), 4500));
     await Promise.race([read, timeout]);
     if (chunks.length === 0) throw new Error('Edge TTS không trả âm thanh');
     return Buffer.concat(chunks);
   } finally {
-    tts.close();
+    try {
+      tts.close();
+    } catch {}
   }
 }
 
@@ -475,27 +465,22 @@ app.get('/api/tts', async (req, res) => {
     const rate = Math.min(1.5, Math.max(0.5, Number(req.query.rate) || 1));
     const hype = req.query.hype === '1';
     // 2 MC: nam (mặc định) và nữ, thêm giọng tiếng Anh để đọc từ tiếng Anh cho chuẩn.
-    // Chỉ nhận các giọng này, không cho truyền tên giọng tuỳ ý.
     const voiceName = req.query.v === 'f' ? 'vi-VN-HoaiMyNeural' : req.query.v === 'en' ? 'en-US-AnaNeural' : TTS_VOICE;
     const key = `${voiceName}|${rate}|${hype}|${text}`;
     let audio = ttsCache.get(key);
-    let fallback = false;
     if (!audio) {
       const english = req.query.v === 'en';
       try {
-        audio = await edgeTts(text, rate, hype, voiceName); // đã tự thử lại 4 lần bên trong
+        audio = await edgeTts(text, rate, hype, voiceName);
       } catch (err) {
-        // giọng dự phòng phải ĐÚNG ngôn ngữ: từ tiếng Anh dùng Google tiếng Anh, Google cũng lỗi thì bỏ câu (không đọc sai)
-        console.warn(`[giọng dự phòng] Edge lỗi 4 lần (${voiceName}), đọc bằng Google ${english ? 'tiếng Anh' : 'tiếng Việt'}: "${text.slice(0, 60)}"`, err instanceof Error ? err.message : err);
+        console.warn(`[TTS] Edge không phản hồi (${voiceName}), dùng Google TTS ${english ? 'tiếng Anh' : 'tiếng Việt'}: "${text.slice(0, 50)}"`);
         audio = await googleTts(text, english ? 'en' : 'vi');
-        fallback = true;
       }
-      // giọng dự phòng không lưu: lần sau đọc lại câu này thì thử Edge trước
-      if (!fallback) ttsCache.set(key, audio);
-      if (ttsCache.size > 200) ttsCache.delete(ttsCache.keys().next().value!);
+      ttsCache.set(key, audio);
+      if (ttsCache.size > 500) ttsCache.delete(ttsCache.keys().next().value!);
     }
     res.setHeader('Content-Type', 'audio/mpeg');
-    res.setHeader('Cache-Control', fallback ? 'no-store' : 'public, max-age=86400');
+    res.setHeader('Cache-Control', 'public, max-age=86400');
     res.send(audio);
   } catch (err) {
     console.error('TTS lỗi:', err);

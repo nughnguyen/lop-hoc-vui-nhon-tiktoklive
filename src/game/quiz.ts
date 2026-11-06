@@ -757,7 +757,18 @@ export class Classroom {
   /** Đã hiện bảng chữ (chữ xáo / phép tính) chưa: cô đọc đề xong, hô bắt đầu mới hiện */
   boardShown = false;
   showBoard(now = this.clock) {
-    if (!this.boardShown) this.boardShownAt = now;
+    if (!this.boardShown) {
+      this.boardShownAt = now;
+      // Cô đọc xong đề, hô bắt đầu: reset đồng hồ để người chơi có ĐỦ questionSec giây trả lời.
+      // Chỉ reset khi có voice (heldMs > 0 = hold() đã chạy trong lúc đọc đề);
+      // không có voice (test / tắt tiếng) thì đồng hồ đã chạy bình thường, không cần reset.
+      if (this.phase === 'question' && this.heldMs > 0) {
+        this.phaseStartedAt = now;
+        this.phaseEndsAt = now + GAME.questionSec * 1000;
+        this.answerStartAt = now;
+        this.heldMs = 0;
+      }
+    }
     this.boardShown = true;
   }
   /** lúc bảng chữ hiện (giờ máy): đáp án GỬI trước lúc này là gõ khi cô chưa đọc xong đề, không tính */
@@ -1852,8 +1863,9 @@ export class Classroom {
       this.warned = true;
       extra.push({ ...this.line0('timeWarn'), warn: true });
     }
-    // phòng giọng hỏng / tắt tiếng: đồng hồ đã chạy hơn 1 giây (cô đọc xong) thì vẫn hiện bảng chữ / nhận đáp án
-    if ((asking || (this.phase === 'show' && this.show?.stage === 'ask')) && !this.boardShown && now - this.phaseStartedAt > 1000) this.showBoard(now);
+    // phòng giọng hỏng / tắt tiếng: cô đọc đề mất 4-8 giây, hold() giữ phaseStartedAt sát now;
+    // khi giọng xong mà callback không gọi showBoard, chờ thêm 8 giây rồi buộc hiện bảng chữ / nhận đáp án
+    if ((asking || (this.phase === 'show' && this.show?.stage === 'ask')) && !this.boardShown && now - this.phaseStartedAt > 8_000) this.showBoard(now);
     if (now < this.phaseEndsAt) return extra;
     return [...extra, ...this.advance(now)];
   }
